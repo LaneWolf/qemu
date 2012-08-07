@@ -197,6 +197,9 @@ BlockJobInfo *block_job_query(BlockJob *job)
     infoffset    = job->offset;
     infspeed     = job->speed;
     infio_status = job->iostatus;
+    if (job->job_type->query) {
+        job->job_type->query(job, info);
+    }
     return info;
 }
 
