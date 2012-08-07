@@ -207,13 +207,13 @@ void block_job_sleep_ns(BlockJob *job, QEMUClock *clock, int64_t ns)
 BlockJobInfo *block_job_query(BlockJob *job)
 {
     BlockJobInfo *info = g_new0(BlockJobInfo, 1);
-    inftype      = g_strdup(job->job_type->job_type);
-    infdevice    = g_strdup(bdrv_get_device_name(job->bs));
-    inflen       = job->len;
-    infpaused    = job->paused;
-    infoffset    = job->offset;
-    infspeed     = job->speed;
-    infio_status = job->iostatus;
+    info->type      = g_strdup(job->job_type->job_type);
+    info->device    = g_strdup(bdrv_get_device_name(job->bs));
+    info->len       = job->len;
+    info->paused    = job->paused;
+    info->offset    = job->offset;
+    info->speed     = job->speed;
+    info->io_status = job->iostatus;
     if (job->job_type->query) {
         job->job_type->query(job, info);
     }

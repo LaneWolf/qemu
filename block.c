@@ -2448,7 +2448,7 @@ BlockInfoList *qmp_query_block(Error **errp)
         info->value = bdrv_query_info(bs);
 
         *p_next = info;
-        p_next = &infnext;
+        p_next = &info->next;
     }
 
     return head;
@@ -2515,7 +2515,7 @@ BlockInfo *bdrv_query_info(BlockDriverState *bs)
             info->inserted->backing_file = g_strdup(bs->backing_file);
         }
 
-        info->value->inserted->backing_file_depth =
+        info->inserted->backing_file_depth =
             bdrv_get_backing_file_depth(bs);
 
         if (bs->io_limits_enabled) {
@@ -2546,7 +2546,7 @@ BlockStatsList *qmp_query_blockstats(Error **errp)
         info->value = bdrv_query_stats(bs);
 
         *p_next = info;
-        p_next = &infnext;
+        p_next = &info->next;
     }
 
     return head;

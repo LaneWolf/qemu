@@ -237,7 +237,7 @@ static void hb_set_between(HBitmap *hb, int level, uint64_t start, uint64_t end)
     if (i < endpos) {
         uint64_t next = (start | (BITS_PER_LONG - 1)) + 1;
         changed |= hb_set_elem(&hb->levels[level][i], start, next - 1);
-        for ( {
+        for (;;) {
             start = next;
             next += BITS_PER_LONG;
             if (++i == endpos) {
@@ -313,7 +313,7 @@ static void hb_reset_between(HBitmap *hb, int level, uint64_t start, uint64_t en
             pos++;
         }
 
-        for ( {
+        for (;;) {
             start = next;
             next += BITS_PER_LONG;
             if (++i == endpos) {
@@ -381,7 +381,7 @@ HBitmap *hbitmap_alloc(uint64_t size, int granularity)
     hb->size = size;
     hb->granularity = granularity;
     for (i = HBITMAP_LEVELS; --i >= 0; ) {
-        size = MA(size + BITS_PER_LONG - 1) >> BITS_PER_LEVEL, 1);
+        size = MAX((size + BITS_PER_LONG - 1) >> BITS_PER_LEVEL, 1);
         hb->levels[i] = g_malloc0(size * sizeof(unsigned long));
     }
 

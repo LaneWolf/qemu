@@ -346,7 +346,7 @@ static void coroutine_fn mirror_run(void *opaque)
 
     bdrv_dirty_iter_init(bs, &s->hbi);
     last_pause_ns = qemu_get_clock_ns(rt_clock);
-    for ( {
+    for (;;) {
         uint64_t delay_ns;
         int64_t cnt;
         bool should_complete;
@@ -486,10 +486,10 @@ static void mirror_query(BlockJob *job, BlockJobInfo *info)
 {
     MirrorBlockJob *s = container_of(job, MirrorBlockJob, common);
 
-    infhas_target = true;
-    inftarget = g_new0(BlockJobTargetInfo, 1);
-    inftarget->info = bdrv_query_info(s->target);
-    inftarget->stats = bdrv_query_stats(s->target);
+    info->has_target = true;
+    info->target = g_new0(BlockJobTargetInfo, 1);
+    info->target->info = bdrv_query_info(s->target);
+    info->target->stats = bdrv_query_stats(s->target);
 }
 
 static void mirror_complete(BlockJob *job, Error **errp)
@@ -551,7 +551,7 @@ void mirror_start(BlockDriverState *bs, BlockDriverState *target,
     s->target = target;
     s->mode = mode;
     s->granularity = granularity;
-    s->buf_size = MAbuf_size, granularity);
+    s->buf_size = MAX(buf_size, granularity);
 
     bdrv_set_dirty_tracking(bs, granularity >> BDRV_SECTOR_BITS);
     bdrv_set_on_error(s->target, on_target_error, on_target_error);
