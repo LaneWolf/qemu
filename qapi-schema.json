@@ -915,6 +915,8 @@
 #
 # @len: the maximum progress value
 #
+# @paused: whether the job is paused (since 1.2)
+#
 # @offset: the current progress value
 #
 # @speed: the rate limit, bytes per second
@@ -923,7 +925,7 @@
 ##
 { 'type': 'BlockJobInfo',
   'data': {'type': 'str', 'device': 'str', 'len': 'int',
-           'offset': 'int', 'speed': 'int'} }
+           'offset': 'int', 'paused': 'bool', 'speed': 'int'} }
 
 ##
 # @query-block-jobs:
@@ -1689,6 +1691,7 @@
 #
 # Returns: Nothing on success
 #          If no background operation is active on this device, BlockJobNotActive
+#          If the job is currently paused, BlockJobPaused
 #
 # Since: 1.1
 ##
