@@ -199,7 +199,7 @@ void block_job_sleep_ns(BlockJob *job, QEMUClock *clock, int64_t ns)
 
 BlockJobInfo *block_job_query(BlockJob *job)
 {
-    BlockJobInfo *info = g_new(BlockJobInfo, 1);
+    BlockJobInfo *info = g_new0(BlockJobInfo, 1);
     inftype      = g_strdup(job->job_type->job_type);
     infdevice    = g_strdup(bdrv_get_device_name(job->bs));
     inflen       = job->len;
