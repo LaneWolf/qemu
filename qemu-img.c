@@ -96,7 +96,11 @@ static void help(void)
            "  '-a' applies a snapshot (revert disk to saved state)\n"
            "  '-c' creates a snapshot\n"
            "  '-d' deletes a snapshot\n"
-           "  '-l' lists all snapshots in the given image\n";
+           "  '-l' lists all snapshots in the given image\n"
+           "Parameters to compare subcommand:\n"
+           "  '-F' Second image format (in case it differs from first image)\n"
+           "  '-q' Quiet mode - do not print any output (except errors)\n"
+           "  '-s' Strict mode - fail on different image size or sector allocation\n";
 
     printf("%s\nSupported formats:", help_msg);
     bdrv_iterate_format(format_print, NULL);
@@ -651,6 +655,277 @@ static int compare_sectors(const uint8_t *buf1, const uint8_t *buf2, int n,
 }
 
 #define IO_BUF_SIZE (2 * 1024 * 1024)
+
+/*
+ * Get number of sectors that can be stored in IO buffer.
+ */
+
+static int64_t sectors_to_process(int64_t total, int64_t from)
+{
+    int64_t rv = total - from;
+
+    if (rv > (IO_BUF_SIZE >> BDRV_SECTOR_BITS)) {
+        return IO_BUF_SIZE >> BDRV_SECTOR_BITS;
+    }
+
+    return rv;
+}
+
+/*
+ * Compares two images. Exit codes:
+ *
+ * 0 - Images are identical
+ * 1 - Images differ
+ * 2 - Error occured
+ */
+
+static int img_compare(int argc, char **argv)
+{
+    const char *fmt1 = NULL, *fmt2 = NULL, *filename1, *filename2;
+    BlockDriverState *bs1, *bs2;
+    int64_t total_sectors1, total_sectors2;
+    uint8_t *buf1 = NULL, *buf2 = NULL;
+    int pnum1, pnum2;
+    int allocated1, allocated2;
+    int flags = BDRV_O_FLAGS;
+    int ret = 0; /* return value - 0 Ident, 1 Different, 2 Error */
+    int progress = 0, quiet = 0, strict = 0;
+    int64_t total_sectors;
+    int64_t sector_num = 0;
+    int64_t nb_sectors;
+    int c, rv, pnum;
+    uint64_t bs_sectors;
+    uint64_t progress_base;
+
+
+    for (;;) {
+        c = getopt(argc, argv, "pf:F:sq");
+        if (c == -1) {
+            break;
+        }
+        switch (c) {
+        case 'f':
+            fmt1 = optarg;
+            if (fmt2 == NULL) {
+                fmt2 = optarg;
+            }
+            break;
+        case 'F':
+            fmt2 = optarg;
+            if (fmt1 == NULL) {
+                fmt2 = optarg;
+            }
+            break;
+        case 'p':
+            progress = (quiet == 0) ? 1 : 0;
+            break;
+        case 'q':
+            quiet = 1;
+            if (progress == 1) {
+                progress = 0;
+            }
+            break;
+        case 's':
+            strict = 1;
+            break;
+        }
+    }
+    if (optind >= argc) {
+        help();
+        goto out3;
+    }
+    filename1 = argv[optind++];
+    filename2 = argv[optind++];
+
+    /* Initialize before goto out */
+    qemu_progress_init(progress, 2.0);
+
+    bs1 = bdrv_new_open(filename1, fmt1, flags);
+    if (!bs1) {
+        error_report("Can't open file %s", filename1);
+        ret = 2;
+        goto out3;
+    }
+
+    bs2 = bdrv_new_open(filename2, fmt2, flags);
+    if (!bs2) {
+        error_report("Can't open file %s:", filename2);
+        ret = 2;
+        goto out2;
+    }
+
+    buf1 = qemu_blockalign(bs1, IO_BUF_SIZE);
+    buf2 = qemu_blockalign(bs2, IO_BUF_SIZE);
+    bdrv_get_geometry(bs1, &bs_sectors);
+    total_sectors1 = bs_sectors;
+    bdrv_get_geometry(bs2, &bs_sectors);
+    total_sectors2 = bs_sectors;
+    total_sectors = total_sectors1;
+    progress_base = total_sectors;
+
+    qemu_progress_print(0, 100);
+
+    if (total_sectors1 != total_sectors2) {
+        BlockDriverState *bsover;
+        int64_t lo_total_sectors, lo_sector_num;
+        const char *filename_over;
+
+        if (strict) {
+            ret = 1;
+            if (!quiet) {
+                printf("Strict mode: Image size mismatch!");
+            }
+            goto out;
+        } else if (!quiet) {
+            printf("Warning: Image size mismatch!\n");
+        }
+
+        if (total_sectors1 > total_sectors2) {
+            total_sectors = total_sectors2;
+            lo_total_sectors = total_sectors1;
+            lo_sector_num = total_sectors2;
+            bsover = bs1;
+            filename_over = filename1;
+        } else {
+            total_sectors = total_sectors1;
+            lo_total_sectors = total_sectors2;
+            lo_sector_num = total_sectors1;
+            bsover = bs2;
+            filename_over = filename2;
+        }
+
+        progress_base = lo_total_sectors;
+
+        for (;;) {
+            nb_sectors = sectors_to_process(lo_total_sectors, lo_sector_num);
+            if (nb_sectors <= 0) {
+                break;
+            }
+            rv = bdrv_is_allocated(bsover, lo_sector_num, nb_sectors, &pnum);
+            nb_sectors = pnum;
+            if (rv) {
+                rv = bdrv_read(bsover, lo_sector_num, buf1, nb_sectors);
+                if (rv < 0) {
+                    error_report("error while reading sector %" PRId64
+                                 " of %s: %s", lo_sector_num, filename_over,
+                                 strerror(-rv));
+                    ret = 2;
+                    goto out;
+                }
+                rv = is_allocated_sectors(buf1, nb_sectors, &pnum);
+                if (rv || pnum != nb_sectors) {
+                    ret = 1;
+                    if (!quiet) {
+                        printf("Content mismatch - Sector %" PRId64
+                               " not available in both images!\n",
+                               rv ? lo_sector_num : lo_sector_num + pnum);
+                    }
+                    goto out;
+                }
+            }
+            lo_sector_num += nb_sectors;
+            qemu_progress_print(((float) nb_sectors / progress_base)*100, 100);
+        }
+    }
+
+
+    for (;;) {
+        nb_sectors = sectors_to_process(total_sectors, sector_num);
+        if (nb_sectors <= 0) {
+            break;
+        }
+        allocated1 = bdrv_is_allocated_above(bs1, NULL, sector_num, nb_sectors,
+                                             &pnum1);
+        allocated2 = bdrv_is_allocated_above(bs2, NULL, sector_num, nb_sectors,
+                                             &pnum2);
+        if (pnum1 < pnum2) {
+            nb_sectors = pnum1;
+        } else {
+            nb_sectors = pnum2;
+        }
+
+        if (allocated1 == allocated2) {
+            if (allocated1) {
+                rv = bdrv_read(bs1, sector_num, buf1, nb_sectors);
+                if (rv < 0) {
+                    ret = 2;
+                    error_report("error while reading sector %" PRId64 " of %s:"
+                                 " %s", sector_num, filename1, strerror(-rv));
+                    goto out;
+                }
+                rv = bdrv_read(bs2, sector_num, buf2, nb_sectors);
+                if (rv < 0) {
+                    ret = 2;
+                    error_report("error while reading sector %" PRId64
+                                 " of %s: %s", sector_num, filename2,
+                                 strerror(-rv));
+                    goto out;
+                }
+                rv = compare_sectors(buf1, buf2, nb_sectors, &pnum);
+                if (rv || pnum != nb_sectors) {
+                    ret = 1;
+                    if (!quiet) {
+                        printf("Content mismatch at sector %" PRId64 "!\n",
+                               rv ? sector_num : sector_num + pnum);
+                    }
+                    goto out;
+                }
+            }
+        } else {
+            BlockDriverState *bstmp;
+            const char *filenametmp;
+
+            if (strict) {
+                ret = 1;
+                if (!quiet) {
+                    printf("Strict mode: Sector %" PRId64
+                           " allocation mismatch!",
+                           sector_num);
+                }
+                goto out;
+            }
+
+            if (allocated1) {
+                bstmp = bs1;
+                filenametmp = filename1;
+            } else {
+                bstmp = bs2;
+                filenametmp = filename2;
+            }
+            rv = bdrv_read(bstmp, sector_num, buf1, nb_sectors);
+            if (rv < 0) {
+                ret = 2;
+                error_report("error while reading sector %" PRId64 " of %s: %s",
+                                sector_num, filenametmp, strerror(-rv));
+                goto out;
+            }
+            rv = is_allocated_sectors(buf1, nb_sectors, &pnum);
+            if (rv || pnum != nb_sectors) {
+                ret = 1;
+                if (!quiet) {
+                    printf("Content mismatch at sector %" PRId64 "!\n",
+                           rv ? sector_num : sector_num + pnum);
+                }
+                goto out;
+            }
+        }
+        sector_num += nb_sectors;
+        qemu_progress_print(((float) nb_sectors / progress_base)*100, 100);
+    }
+    if (!quiet) {
+        printf("Images are identical.\n");
+    }
+
+out:
+    bdrv_delete(bs2);
+    qemu_vfree(buf1);
+    qemu_vfree(buf2);
+out2:
+    bdrv_delete(bs1);
+out3:
+    qemu_progress_end();
+    return ret;
+}
 
 static int img_convert(int argc, char **argv)
 {
