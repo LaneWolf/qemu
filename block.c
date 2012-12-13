@@ -4449,7 +4449,7 @@ bdrv_acct_done(BlockDriverState *bs, BlockAcctCookie *cookie)
 
 int bdrv_img_create(const char *filename, const char *fmt,
                     const char *base_filename, const char *base_fmt,
-                    char *options, uint64_t img_size, int flags)
+                    char *options, uint64_t img_size, int flags, bool quiet)
 {
     QEMUOptionParameter *param = NULL, *create_options = NULL;
     QEMUOptionParameter *backing_fmt, *backing_file, *size;
@@ -4565,10 +4565,11 @@ int bdrv_img_create(const char *filename, const char *fmt,
         }
     }
 
-    printf("Formatting '%s', fmt=%s ", filename, fmt);
-    print_option_parameters(param);
-    puts("");
-
+    if (!quiet) {
+        printf("Formatting '%s', fmt=%s ", filename, fmt);
+        print_option_parameters(param);
+        puts("");
+    }
     ret = bdrv_create(drv, filename, param);
 
     if (ret < 0) {
