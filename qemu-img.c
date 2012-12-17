@@ -103,7 +103,12 @@ static void help(void)
            "  '-a' applies a snapshot (revert disk to saved state)\n"
            "  '-c' creates a snapshot\n"
            "  '-d' deletes a snapshot\n"
-           "  '-l' lists all snapshots in the given image\n";
+           "  '-l' lists all snapshots in the given image\n"
+           "\n"
+           "Parameters to compare subcommand:\n"
+           "  '-f' First image format\n"
+           "  '-F' Second image format\n"
+           "  '-s' Strict mode - fail on different image size or sector allocation\n";
 
     printf("%s\nSupported formats:", help_msg);
     bdrv_iterate_format(format_print, NULL);
