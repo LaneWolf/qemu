@@ -32,6 +32,7 @@
 #include "block/block_int.h"
 #include <getopt.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -86,6 +87,7 @@ static void help(void)
            "       rebasing in this case (useful for renaming the backing file)\n"
            "  '-h' with or without a command shows this help and lists the supported formats\n"
            "  '-p' show progress of command (only certain commands)\n"
+           "  '-q' Quiet mode - do not print any output (except errors)\n"
            "  '-S' indicates the consecutive number of bytes that must contain only zeros\n"
            "       for qemu-img to create a sparse image during conversion\n"
            "  '--output' takes the format in which the output must be done (human or json)\n"
@@ -107,6 +109,18 @@ static void help(void)
     bdrv_iterate_format(format_print, NULL);
     printf("\n");
     exit(1);
+}
+
+static int qprintf(bool quiet, const char *fmt, ...)
+{
+    int ret = 0;
+    if (!quiet) {
+        va_list args;
+        va_start(args, fmt);
+        ret = vprintf(fmt, args);
+        va_end(args);
+    }
+    return ret;
 }
 
 #if defined(WIN32)
@@ -227,7 +241,8 @@ static int print_block_option_help(const char *filename, const char *fmt)
 static BlockDriverState *bdrv_new_open(const char *filename,
                                        const char *fmt,
                                        int flags,
-                                       bool require_io)
+                                       bool require_io,
+                                       bool quiet)
 {
     BlockDriverState *bs;
     BlockDriver *drv;
@@ -253,7 +268,7 @@ static BlockDriverState *bdrv_new_open(const char *filename,
     }
 
     if (bdrv_is_encrypted(bs) && require_io) {
-        printf("Disk image '%s' is encrypted.\n", filename);
+        qprintf(quiet, "Disk image '%s' is encrypted.\n", filename);
         if (read_password(password, sizeof(password)) < 0) {
             error_report("No password given");
             goto fail;
@@ -302,9 +317,10 @@ static int img_create(int argc, char **argv)
     const char *base_filename = NULL;
     char *options = NULL;
     Error *local_err = NULL;
+    bool quiet = false;
 
     for(;;) {
-        c = getopt(argc, argv, "F:b:f:he6o:");
+        c = getopt(argc, argv, "F:b:f:he6o:q");
         if (c == -1) {
             break;
         }
@@ -332,6 +348,9 @@ static int img_create(int argc, char **argv)
             return 1;
         case 'o':
             options = optarg;
+            break;
+        case 'q':
+            quiet = true;
             break;
         }
     }
@@ -365,7 +384,7 @@ static int img_create(int argc, char **argv)
     }
 
     bdrv_img_create(filename, fmt, base_filename, base_fmt,
-                    options, img_size, BDRV_O_FLAGS, &local_err);
+                    options, img_size, BDRV_O_FLAGS, &local_err, quiet);
     if (error_is_set(&local_err)) {
         error_report("%s", error_get_pretty(local_err));
         error_free(local_err);
@@ -391,10 +410,11 @@ static int img_check(int argc, char **argv)
     BdrvCheckResult result;
     int fix = 0;
     int flags = BDRV_O_FLAGS | BDRV_O_CHECK;
+    bool quiet = false;
 
     fmt = NULL;
     for(;;) {
-        c = getopt(argc, argv, "f:hr:");
+        c = getopt(argc, argv, "f:hr:q");
         if (c == -1) {
             break;
         }
@@ -417,6 +437,9 @@ static int img_check(int argc, char **argv)
                 help();
             }
             break;
+        case 'q':
+            quiet = true;
+            break;
         }
     }
     if (optind >= argc) {
@@ -424,7 +447,7 @@ static int img_check(int argc, char **argv)
     }
     filename = argv[optind++];
 
-    bs = bdrv_new_open(filename, fmt, flags, true);
+    bs = bdrv_new_open(filename, fmt, flags, true, quiet);
     if (!bs) {
         return 1;
     }
@@ -437,50 +460,55 @@ static int img_check(int argc, char **argv)
     }
 
     if (result.corruptions_fixed || result.leaks_fixed) {
-        printf("The following inconsistencies were found and repaired:\n\n"
-               "    %d leaked clusters\n"
-               "    %d corruptions\n\n"
-               "Double checking the fixed image now...\n",
-               result.leaks_fixed,
-               result.corruptions_fixed);
+        qprintf(quiet,
+                "The following inconsistencies were found and repaired:\n\n"
+                "    %d leaked clusters\n"
+                "    %d corruptions\n\n"
+                "Double checking the fixed image now...\n",
+                result.leaks_fixed,
+                result.corruptions_fixed);
         ret = bdrv_check(bs, &result, 0);
     }
 
     if (!(result.corruptions || result.leaks || result.check_errors)) {
-        printf("No errors were found on the image.\n");
+        qprintf(quiet, "No errors were found on the image.\n");
     } else {
         if (result.corruptions) {
-            printf("\n%d errors were found on the image.\n"
-                "Data may be corrupted, or further writes to the image "
-                "may corrupt it.\n",
-                result.corruptions);
+            qprintf(quiet, "\n%d errors were found on the image.\n"
+                    "Data may be corrupted, or further writes to the image "
+                    "may corrupt it.\n",
+                    result.corruptions);
         }
 
         if (result.leaks) {
-            printf("\n%d leaked clusters were found on the image.\n"
-                "This means waste of disk space, but no harm to data.\n",
-                result.leaks);
+            qprintf(quiet, "\n%d leaked clusters were found on the image.\n"
+                    "This means waste of disk space, but no harm to data.\n",
+                    result.leaks);
         }
 
         if (result.check_errors) {
-            printf("\n%d internal errors have occurred during the check.\n",
-                result.check_errors);
+            qprintf(quiet,
+                    "\n%d internal errors have occurred during the check.\n",
+                    result.check_errors);
         }
     }
 
     if (result.bfi.total_clusters != 0 && result.bfi.allocated_clusters != 0) {
-        printf("%" PRId64 "/%" PRId64 "= %0.2f%% allocated, %0.2f%% fragmented\n",
+        /* BEWARE: parameter list not indented due to long expressions */
+        qprintf(quiet,
+        "%" PRId64 "/%" PRId64 "= %0.2f%% allocated, %0.2f%% fragmented\n",
         result.bfi.allocated_clusters, result.bfi.total_clusters,
         result.bfi.allocated_clusters * 100.0 / result.bfi.total_clusters,
         result.bfi.fragmented_clusters * 100.0 / result.bfi.allocated_clusters);
+        /* end of parameter list */
     }
 
     bdrv_delete(bs);
 
     if (ret < 0 || result.check_errors) {
-        printf("\nAn error has occurred during the check: %s\n"
-            "The check is not complete and may have missed error.\n",
-            strerror(-ret));
+        qprintf(quiet, "\nAn error has occurred during the check: %s\n"
+                "The check is not complete and may have missed error.\n",
+                strerror(-ret));
         return 1;
     }
 
@@ -498,11 +526,12 @@ static int img_commit(int argc, char **argv)
     int c, ret, flags;
     const char *filename, *fmt, *cache;
     BlockDriverState *bs;
+    bool quiet = false;
 
     fmt = NULL;
     cache = BDRV_DEFAULT_CACHE;
     for(;;) {
-        c = getopt(argc, argv, "f:ht:");
+        c = getopt(argc, argv, "f:ht:q");
         if (c == -1) {
             break;
         }
@@ -516,6 +545,9 @@ static int img_commit(int argc, char **argv)
             break;
         case 't':
             cache = optarg;
+            break;
+        case 'q':
+            quiet = true;
             break;
         }
     }
@@ -531,14 +563,14 @@ static int img_commit(int argc, char **argv)
         return -1;
     }
 
-    bs = bdrv_new_open(filename, fmt, flags, true);
+    bs = bdrv_new_open(filename, fmt, flags, true, quiet);
     if (!bs) {
         return 1;
     }
     ret = bdrv_commit(bs);
     switch(ret) {
     case 0:
-        printf("Image committed.\n");
+        qprintf(quiet, "Image committed.\n");
         break;
     case -ENOENT:
         error_report("No disk inserted");
@@ -681,6 +713,7 @@ static int img_convert(int argc, char **argv)
     const char *snapshot_name = NULL;
     float local_progress = 0;
     int min_sparse = 8; /* Need at least 4k of zeros for sparse detection */
+    bool quiet = false;
 
     fmt = NULL;
     out_fmt = "raw";
@@ -688,7 +721,7 @@ static int img_convert(int argc, char **argv)
     out_baseimg = NULL;
     compress = 0;
     for(;;) {
-        c = getopt(argc, argv, "f:O:B:s:hce6o:pS:t:");
+        c = getopt(argc, argv, "f:O:B:s:hce6o:pS:t:q");
         if (c == -1) {
             break;
         }
@@ -742,7 +775,14 @@ static int img_convert(int argc, char **argv)
         case 't':
             cache = optarg;
             break;
+        case 'q':
+            quiet = true;
+            break;
         }
+    }
+
+    if (quiet) {
+        progress = 0;
     }
 
     bs_n = argc - optind - 1;
@@ -773,7 +813,8 @@ static int img_convert(int argc, char **argv)
 
     total_sectors = 0;
     for (bs_i = 0; bs_i < bs_n; bs_i++) {
-        bs[bs_i] = bdrv_new_open(argv[optind + bs_i], fmt, BDRV_O_FLAGS, true);
+        bs[bs_i] = bdrv_new_open(argv[optind + bs_i], fmt, BDRV_O_FLAGS, true,
+                                 quiet);
         if (!bs[bs_i]) {
             error_report("Could not open '%s'", argv[optind + bs_i]);
             ret = -1;
@@ -892,7 +933,7 @@ static int img_convert(int argc, char **argv)
         return -1;
     }
 
-    out_bs = bdrv_new_open(out_filename, out_fmt, flags, true);
+    out_bs = bdrv_new_open(out_filename, out_fmt, flags, true, quiet);
     if (!out_bs) {
         ret = -1;
         goto out;
@@ -1355,7 +1396,7 @@ static ImageInfoList *collect_image_info_list(const char *filename,
         g_hash_table_insert(filenames, (gpointer)filename, NULL);
 
         bs = bdrv_new_open(filename, fmt, BDRV_O_FLAGS | BDRV_O_NO_BACKING,
-                           false);
+                           false, false);
         if (!bs) {
             goto err;
         }
@@ -1491,11 +1532,12 @@ static int img_snapshot(int argc, char **argv)
     int c, ret = 0, bdrv_oflags;
     int action = 0;
     qemu_timeval tv;
+    bool quiet = false;
 
     bdrv_oflags = BDRV_O_FLAGS | BDRV_O_RDWR;
     /* Parse commandline parameters */
     for(;;) {
-        c = getopt(argc, argv, "la:c:d:h");
+        c = getopt(argc, argv, "la:c:d:hq");
         if (c == -1) {
             break;
         }
@@ -1536,6 +1578,9 @@ static int img_snapshot(int argc, char **argv)
             action = SNAPSHOT_DELETE;
             snapshot_name = optarg;
             break;
+        case 'q':
+            quiet = true;
+            break;
         }
     }
 
@@ -1545,7 +1590,7 @@ static int img_snapshot(int argc, char **argv)
     filename = argv[optind++];
 
     /* Open the image */
-    bs = bdrv_new_open(filename, NULL, bdrv_oflags, true);
+    bs = bdrv_new_open(filename, NULL, bdrv_oflags, true, quiet);
     if (!bs) {
         return 1;
     }
@@ -1605,6 +1650,7 @@ static int img_rebase(int argc, char **argv)
     int c, flags, ret;
     int unsafe = 0;
     int progress = 0;
+    bool quiet = false;
 
     /* Parse commandline parameters */
     fmt = NULL;
@@ -1612,7 +1658,7 @@ static int img_rebase(int argc, char **argv)
     out_baseimg = NULL;
     out_basefmt = NULL;
     for(;;) {
-        c = getopt(argc, argv, "uhf:F:b:pt:");
+        c = getopt(argc, argv, "uhf:F:b:pt:q");
         if (c == -1) {
             break;
         }
@@ -1639,7 +1685,14 @@ static int img_rebase(int argc, char **argv)
         case 't':
             cache = optarg;
             break;
+        case 'q':
+            quiet = true;
+            break;
         }
+    }
+
+    if (quiet) {
+        progress = 0;
     }
 
     if ((optind >= argc) || (!unsafe && !out_baseimg)) {
@@ -1663,7 +1716,7 @@ static int img_rebase(int argc, char **argv)
      * Ignore the old backing file for unsafe rebase in case we want to correct
      * the reference to a renamed or moved backing file.
      */
-    bs = bdrv_new_open(filename, fmt, flags, true);
+    bs = bdrv_new_open(filename, fmt, flags, true, quiet);
     if (!bs) {
         return 1;
     }
@@ -1875,6 +1928,7 @@ static int img_resize(int argc, char **argv)
     int c, ret, relative;
     const char *filename, *fmt, *size;
     int64_t n, total_size;
+    bool quiet = false;
     BlockDriverState *bs = NULL;
     QemuOpts *param;
     static QemuOptsList resize_options = {
@@ -1903,7 +1957,7 @@ static int img_resize(int argc, char **argv)
     /* Parse getopt arguments */
     fmt = NULL;
     for(;;) {
-        c = getopt(argc, argv, "f:h");
+        c = getopt(argc, argv, "f:hq");
         if (c == -1) {
             break;
         }
@@ -1914,6 +1968,9 @@ static int img_resize(int argc, char **argv)
             break;
         case 'f':
             fmt = optarg;
+            break;
+        case 'q':
+            quiet = true;
             break;
         }
     }
@@ -1948,7 +2005,7 @@ static int img_resize(int argc, char **argv)
     n = qemu_opt_get_size(param, BLOCK_OPT_SIZE, 0);
     qemu_opts_del(param);
 
-    bs = bdrv_new_open(filename, fmt, BDRV_O_FLAGS | BDRV_O_RDWR, true);
+    bs = bdrv_new_open(filename, fmt, BDRV_O_FLAGS | BDRV_O_RDWR, true, quiet);
     if (!bs) {
         ret = -1;
         goto out;
@@ -1968,7 +2025,7 @@ static int img_resize(int argc, char **argv)
     ret = bdrv_truncate(bs, total_size);
     switch (ret) {
     case 0:
-        printf("Image resized.\n");
+        qprintf(quiet, "Image resized.\n");
         break;
     case -ENOTSUP:
         error_report("This image does not support resize");
